@@ -305,6 +305,104 @@ for YEAR in 2012 2013 2014 2015; do
 done
 ```
 
+## 3.3 Alpha diversity group significance
+
+```bash
+# Kruskal-Wallis test of alpha diversity across noble rot stages, per metric and year.
+# The visualization also reports pairwise comparisons; pairwise Kruskal-Wallis on two
+# groups is equivalent to the Wilcoxon rank-sum test used for the figure letters.
+#
+# Note: 3.1 writes Faith's PD as 16S_faith_${YEAR}.qza, so "faith" is used here rather
+# than the QIIME metric name faith_pd.
+
+for YEAR in 2012 2013 2014 2015; do
+    for METRIC in shannon observed_features evenness chao1 faith; do
+        qiime diversity alpha-group-significance \
+            --i-alpha-diversity ${DATA}/16S_${METRIC}_${YEAR}.qza \
+            --m-metadata-file metadata/mapping_16S.txt \
+            --o-visualization ${DATA}/16S_${METRIC}_${YEAR}_significance.qzv
+    done
+done
+
+# Fungi: no phylogenetic metric
+for YEAR in 2012 2013 2014 2015; do
+    for METRIC in shannon observed_features evenness chao1; do
+        qiime diversity alpha-group-significance \
+            --i-alpha-diversity ${DATA}/ITS_${METRIC}_${YEAR}.qza \
+            --m-metadata-file metadata/mapping_ITS.txt \
+            --o-visualization ${DATA}/ITS_${METRIC}_${YEAR}_significance.qzv
+    done
+done
+
+# Export the per-sample vectors for the summary table below
+for MARKER in 16S ITS; do
+    for YEAR in 2012 2013 2014 2015; do
+        for METRIC in shannon observed_features evenness chao1 faith; do
+            IN=${DATA}/${MARKER}_${METRIC}_${YEAR}.qza
+            [ -f "${IN}" ] || continue
+            qiime tools export \
+                --input-path "${IN}" \
+                --output-path ${DATA}/export/${MARKER}_${METRIC}_${YEAR}
+        done
+    done
+done
+```
+
+## 3.4 Alpha diversity summary table
+
+Produces the per-year, per-metric table of `mean ± SD` by stage with the Kruskal-Wallis
+p-value — the values reported in the Results and in Supplementary Tables S2 and S3.
+
+```r
+# Alpha diversity summary: mean +/- SD per stage, with Kruskal-Wallis p-values.
+DATA <- "path/to/output"
+
+read_mapping <- function(path) {
+  hdr <- strsplit(readLines(path, n = 1), "\t")[[1]]
+  hdr[1] <- sub("^#", "", hdr[1])            # "#SampleID" -> "SampleID"
+  m <- read.delim(path, sep = "\t", header = FALSE, skip = 2,   # skip header + #q2:types
+                  col.names = hdr, check.names = FALSE, colClasses = "character")
+  names(m)[1] <- "SampleID"
+  m
+}
+
+alpha_table <- function(prefix, metrics, mapping,
+                        years = c(2012, 2013, 2014, 2015)) {
+  map  <- read_mapping(mapping)
+  rows <- list()
+  for (y in years) for (met in metrics) {
+    f <- file.path(DATA, "export", sprintf("%s_%s_%s", prefix, met, y),
+                   "alpha-diversity.tsv")
+    if (!file.exists(f)) next                 # stage/year combinations not sampled
+    a <- read.delim(f, sep = "\t", header = TRUE, check.names = FALSE)
+    names(a)[1:2] <- c("SampleID", "value")
+    d <- merge(a, map, by = "SampleID")
+    d$Stage <- as.factor(d$Stage)
+
+    stats <- tapply(d$value, d$Stage, function(v)
+               sprintf("%s ± %s", round(mean(v), 3), round(sd(v), 3)))
+    p <- if (nlevels(droplevels(d$Stage)) > 1)
+           round(kruskal.test(value ~ Stage, data = d)$p.value, 4) else NA
+
+    row <- list(year = y, metric = met,
+                n = round(mean(table(d$Stage)[table(d$Stage) > 0])))
+    for (s in c("0_control", "1_S1", "2_S2", "3_S3"))
+      row[[s]] <- if (s %in% names(stats)) stats[[s]] else NA
+    row$kruskal_p <- p
+    rows[[length(rows) + 1]] <- as.data.frame(row, check.names = FALSE)
+  }
+  do.call(rbind, rows)
+}
+
+bact <- alpha_table("16S", c("shannon", "observed", "chao1", "faith", "pielou"),
+                    "metadata/mapping_16S.txt")
+fung <- alpha_table("ITS", c("shannon", "observed", "chao1", "pielou"),
+                    "metadata/mapping_ITS.txt")
+
+write.csv(bact, file.path(DATA, "16S_alpha_table.csv"), row.names = FALSE)
+write.csv(fung, file.path(DATA, "ITS_alpha_table.csv"), row.names = FALSE)
+```
+
 ---
 
 ## 4. Differential abundance analysis (ANCOM-BC)
